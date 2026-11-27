@@ -1,0 +1,260 @@
+# Spoken reminders for custom_sentences/en/reminders.yaml.
+#
+# Each reminder is an item with a due time in todo.reminders, a Local To-do
+# list (Settings > Integrations > Local To-do, named "Reminders"). Reminders
+# added in the To-do UI with a due time ring too. The "Voice reminders"
+# automation keeps input_datetime.voice_reminder_next at the earliest due item,
+# so nothing polls; when it fires, every item due by then is spoken on
+# vp_satellite() and marked completed.
+
+input_datetime:
+  voice_reminder_next:
+    name: Next Voice Reminder
+    has_date: true
+    has_time: true
+    icon: mdi:bell-ring
+
+intent_script:
+  RemindAt:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      - variables:
+          when: >-
+            {% from 'voice_pack.jinja' import vp_reminder %}{{ vp_reminder(time, task, day | default("")) | from_json }}
+      - if: "{{ when.ok }}"
+        then:
+          - action: todo.add_item
+            target:
+              entity_id: todo.reminders
+            data:
+              item: "{{ when.task }}"
+              due_datetime: "{{ when.local }}"
+      - stop: ""
+        response_variable: when
+    speech:
+      text: >-
+        {%- if action_response.ok -%}
+        OK, I'll remind you {{ verb | default("to") }} {{ action_response.task }} at {{ action_response.say }}.
+        {%- else -%}
+        Sorry, I didn't catch when to remind you.
+        {%- endif -%}
+
+  RemindIn:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      - action: todo.add_item
+        target:
+          entity_id: todo.reminders
+        data:
+          item: "{{ task | trim }}"
+          due_datetime: >-
+            {{ (now() + timedelta(hours=hours | default(0) | int, minutes=minutes | default(0) | int)).strftime("%Y-%m-%d %H:%M:%S") }}
+    speech:
+      text: >-
+        {%- set h = hours | default(0) | int -%}
+        {%- set m = minutes | default(0) | int -%}
+        {%- set parts = ([h ~ (" hour" if h == 1 else " hours")] if h else []) + ([m ~ (" minute" if m == 1 else " minutes")] if m else []) -%}
+        OK, I'll remind you {{ verb | default("to") }} {{ task | trim }} in {{ parts | join(" and ") }}.
+
+  ListReminders:
+    action:
+      - action: todo.get_items
+        target:
+          entity_id: todo.reminders
+        data:
+          status: needs_action
+        response_variable: r
+      - stop: ""
+        response_variable: r
+    speech:
+      text: >-
+        {%- from 'voice_pack.jinja' import vp_say -%}
+        {%- set items = action_response["todo.reminders"]["items"] | selectattr("due", "defined") | selectattr("due", "search", "T") | sort(attribute="due") | list -%}
+        {%- set ns = namespace(said=[]) -%}
+        {%- for x in items[:5] -%}
+          {%- set ns.said = ns.said + [x.summary ~ " at " ~ vp_say(x.due | as_datetime | as_local)] -%}
+        {%- endfor -%}
+        {%- if items | length == 0 -%}
+        You have no reminders.
+        {%- elif items | length == 1 -%}
+        You have one reminder: {{ ns.said[0] }}.
+        {%- else -%}
+        You have {{ items | length }} reminders: {{ ns.said[:-1] | join(", ") }}, and {{ ns.said[-1] }}.
+        {%- endif -%}
+
+  CancelReminders:
+    action:
+      - action: todo.get_items
+        target:
+          entity_id: todo.reminders
+        data:
+          status: needs_action
+        response_variable: r
+      - variables:
+          uids: '{{ r["todo.reminders"]["items"] | map(attribute="uid") | list }}'
+      - if: "{{ uids | length > 0 }}"
+        then:
+          - action: todo.remove_item
+            target:
+              entity_id: todo.reminders
+            data:
+              item: "{{ uids }}"
+      - variables:
+          result:
+            count: "{{ uids | length }}"
+      - stop: ""
+        response_variable: result
+    speech:
+      text: >-
+        {%- set n = action_response.count | default(0) | int -%}
+        {%- if n == 0 -%}
+        You have no reminders.
+        {%- else -%}
+        Cancelled {{ n }} reminder{{ "" if n == 1 else "s" }}.
+        {%- endif -%}
+
+  CancelReminder:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      - action: todo.get_items
+        target:
+          entity_id: todo.reminders
+        data:
+          status: needs_action
+        response_variable: r
+      - variables:
+          want: "{{ task | trim | lower }}"
+          matches: >-
+            {%- set ns = namespace(out=[]) -%}
+            {%- for x in r["todo.reminders"]["items"] if want in (x.summary | lower) -%}{%- set ns.out = ns.out + [x] -%}{%- endfor -%}
+            {{ ns.out }}
+      - if: "{{ matches | length > 0 }}"
+        then:
+          - action: todo.remove_item
+            target:
+              entity_id: todo.reminders
+            data:
+              item: '{{ matches | map(attribute="uid") | list }}'
+      - variables:
+          result:
+            count: "{{ matches | length }}"
+      - stop: ""
+        response_variable: result
+    speech:
+      text: >-
+        {%- if action_response.count | int > 0 -%}
+        Cancelled the reminder to {{ task | trim }}.
+        {%- else -%}
+        I couldn't find a reminder to {{ task | trim }}.
+        {%- endif -%}
+
+automation:
+  - id: voice_reminders_ring
+    alias: Voice reminders
+    description: Speak due reminders from todo.reminders and schedule the next one.
+    triggers:
+      - trigger: time
+        at: input_datetime.voice_reminder_next
+      - trigger: state
+        entity_id: todo.reminders
+      - trigger: homeassistant
+        event: start
+    actions:
+      - action: todo.get_items
+        target:
+          entity_id: todo.reminders
+        data:
+          status: needs_action
+        response_variable: r
+      - variables:
+          timed: >-
+            {{ r["todo.reminders"]["items"] | selectattr("due", "defined")
+               | selectattr("due", "search", "T") | sort(attribute="due") | list }}
+          due_now: >-
+            {%- set cutoff = now() + timedelta(seconds=30) -%}
+            {%- set ns = namespace(out=[]) -%}
+            {%- for x in timed if (x.due | as_datetime) <= cutoff -%}{%- set ns.out = ns.out + [x] -%}{%- endfor -%}
+            {{ ns.out }}
+          later: >-
+            {%- set cutoff = now() + timedelta(seconds=30) -%}
+            {%- set ns = namespace(out=[]) -%}
+            {%- for x in timed if (x.due | as_datetime) > cutoff -%}{%- set ns.out = ns.out + [x] -%}{%- endfor -%}
+            {{ ns.out }}
+      - if: "{{ later | length > 0 }}"
+        then:
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.voice_reminder_next
+            data:
+              timestamp: "{{ (later[0].due | as_datetime).timestamp() }}"
+      - repeat:
+          for_each: "{{ due_now }}"
+          sequence:
+            - action: assist_satellite.announce
+              target:
+                entity_id: >-
+                  {% from 'voice_pack_config.jinja' import vp_satellite %}{{ vp_satellite() }}
+              data:
+                message: "Reminder: {{ repeat.item.summary }}."
+            - action: todo.update_item
+              target:
+                entity_id: todo.reminders
+              data:
+                item: "{{ repeat.item.uid }}"
+                status: completed
+    mode: queued
+    max: 10
+
+script:
+  # Exposed to the LLM agent for reminder requests the sentences miss ("make sure I
+  # remember to call the bank around 3"). Routes through the built-in agent, so the
+  # time is read by the same parser and the confirmation says what was stored. A
+  # model that skips the tool and confirms on its own sets nothing, so the reply must
+  # come from here.
+  set_reminder:
+    alias: Set reminder
+    description: >-
+      Set a reminder. Pass the task in a few words, and either the time as the user said
+      it ("3 pm", "tomorrow at 9") or a delay in minutes. Say the returned sentence to the
+      user word for word; it says whether the reminder was set.
+    fields:
+      task:
+        description: What to remind about, e.g. "call the bank"
+        required: true
+        selector:
+          text:
+      time:
+        description: Time as spoken, e.g. "3 pm", "7:30", "tomorrow at 9"
+        selector:
+          text:
+      minutes:
+        description: Delay in minutes, for "in 20 minutes" or "in 2 hours" (120)
+        selector:
+          number:
+            min: 1
+            max: 720
+    sequence:
+      - variables:
+          text: >-
+            {%- set raw = task | default('') | trim -%}
+            {%- set verb = 'about' if raw | lower is match('about ') else 'to' -%}
+            {%- set t = raw | regex_replace('^(to|about) ', '', ignorecase=True) -%}
+            {%- if minutes | default(0) | int(0) > 0 -%}
+            remind me in {{ minutes | int }} minutes {{ verb }} {{ t }}
+            {%- else -%}
+            remind me at {{ time | default('') | trim }} {{ verb }} {{ t }}
+            {%- endif -%}
+      - action: conversation.process
+        data:
+          agent_id: conversation.home_assistant
+          language: en
+          text: "{{ text }}"
+        response_variable: r
+      - variables:
+          result:
+            speech: "{{ r.response.speech.plain.speech }}"
+      - stop: ""
+        response_variable: result

@@ -1,0 +1,32 @@
+# Verdicts for sweep misses (tests/test_sweep.py). Each generated sentence that
+# matches nothing, or matches with no readable time, needs one:
+#   refuse  correct to leave unmatched (vague, or not a request we handle)
+#   gap     should work and does not yet; say what is missing
+
+"remind me in a few minutes to call mom":
+  verdict: refuse
+  why: 'a few minutes is no particular time; asking again beats guessing one'
+"remind me in a few minutes to take out the trash":
+  verdict: refuse
+  why: 'a few minutes is no particular time; asking again beats guessing one'
+"remind me in a few minutes to take my 2 pills":
+  verdict: refuse
+  why: 'a few minutes is no particular time; asking again beats guessing one'
+"remind me to call mom in a few minutes":
+  verdict: refuse
+  why: 'a few minutes is no particular time; asking again beats guessing one'
+"remind me to take out the trash in a few minutes":
+  verdict: refuse
+  why: 'a few minutes is no particular time; asking again beats guessing one'
+"remind me to take my 2 pills in a few minutes":
+  verdict: refuse
+  why: 'a few minutes is no particular time; asking again beats guessing one'
+"can you remind me in a few minutes to call mom":
+  verdict: refuse
+  why: 'a few minutes is no particular time; asking again beats guessing one'
+"can you remind me in a few minutes to take out the trash":
+  verdict: refuse
+  why: 'a few minutes is no particular time; asking again beats guessing one'
+"can you remind me in a few minutes to take my 2 pills":
+  verdict: refuse
+  why: 'a few minutes is no particular time; asking again beats guessing one'

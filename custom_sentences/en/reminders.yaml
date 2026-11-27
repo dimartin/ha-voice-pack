@@ -1,0 +1,96 @@
+# Spoken reminders; Assist has no reminder intent. Reminders are items with a
+# due time in todo.reminders (a Local To-do list), spoken on the satellite when
+# due. Handled by packages/voice_reminders.yaml.
+language: "en"
+intents:
+  RemindAt:
+    data:
+      - sentences:
+          - "[(can|could|would) you] [please] remind me to {task} [{reminder_day:day}] at {time} [please]"
+          - "[(can|could|would) you] [please] remind me [{reminder_day:day}] at {time} to {task} [please]"
+          - "[(can|could|would) you] [please] set a reminder [{reminder_day:day}] (for|at) {time} to {task} [please]"
+          - "[(can|could|would) you] [please] set a reminder to {task} [{reminder_day:day}] at {time} [please]"
+      - sentences:
+          - "[(can|could|would) you] [please] remind me about {task} [{reminder_day:day}] at {time} [please]"
+          - "[(can|could|would) you] [please] remind me [{reminder_day:day}] at {time} about {task} [please]"
+          - "[(can|could|would) you] [please] set a reminder [{reminder_day:day}] (for|at) {time} about {task} [please]"
+          - "[(can|could|would) you] [please] set a reminder about {task} [{reminder_day:day}] at {time} [please]"
+        slots:
+          verb: about
+  RemindIn:
+    data:
+      - sentences:
+          - "[(can|could|would) you] [please] remind me in {minutes} minute[s] to {task} [please]"
+          - "[(can|could|would) you] [please] remind me to {task} in {minutes} minute[s] [please]"
+          - "[(can|could|would) you] [please] remind me in {hours} hour[s] to {task} [please]"
+          - "[(can|could|would) you] [please] remind me to {task} in {hours} hour[s] [please]"
+      - sentences:
+          - "[(can|could|would) you] [please] remind me in {minutes} minute[s] about {task} [please]"
+          - "[(can|could|would) you] [please] remind me about {task} in {minutes} minute[s] [please]"
+          - "[(can|could|would) you] [please] remind me in {hours} hour[s] about {task} [please]"
+          - "[(can|could|would) you] [please] remind me about {task} in {hours} hour[s] [please]"
+        slots:
+          verb: about
+      - sentences:
+          - "[(can|could|would) you] [please] remind me in an hour to {task} [please]"
+          - "[(can|could|would) you] [please] remind me to {task} in an hour [please]"
+        slots:
+          hours: 1
+      - sentences:
+          - "[(can|could|would) you] [please] remind me in an hour about {task} [please]"
+          - "[(can|could|would) you] [please] remind me about {task} in an hour [please]"
+        slots:
+          verb: about
+          hours: 1
+      - sentences:
+          - "[(can|could|would) you] [please] remind me in half an hour to {task} [please]"
+          - "[(can|could|would) you] [please] remind me to {task} in half an hour [please]"
+        slots:
+          minutes: 30
+      - sentences:
+          - "[(can|could|would) you] [please] remind me in half an hour about {task} [please]"
+          - "[(can|could|would) you] [please] remind me about {task} in half an hour [please]"
+        slots:
+          verb: about
+          minutes: 30
+  ListReminders:
+    data:
+      - sentences:
+          - "(what are|list|tell me) my reminders"
+          - "what reminders do I have"
+          - "(do I have|are there) any reminders"
+  CancelReminders:
+    data:
+      - sentences:
+          - "(cancel|clear|delete|remove) all [of] my reminders"
+          - "(cancel|clear|delete|remove) my reminders"
+  CancelReminder:
+    data:
+      - sentences:
+          - "(cancel|delete|remove) [the|my] reminder (to|about|for) {task}"
+lists:
+  task:
+    wildcard: true
+  time:
+    wildcard: true
+  reminder_day:
+    values:
+      - "today"
+      - "tomorrow"
+      # vp_reminder passes these on to vp_when with the time
+      - "tomorrow morning"
+      - "tomorrow afternoon"
+      - "tomorrow evening"
+      - "tomorrow night"
+      - "this morning"
+      - "this afternoon"
+      - "this evening"
+      - "tonight"
+  minutes:
+    range:
+      from: 1
+      to: 720
+  hours:
+    range:
+      from: 1
+      to: 48

@@ -1,0 +1,185 @@
+{#- Shared helpers for the voice pack. Import with
+    {% from 'voice_pack.jinja' import vp_when %}
+-#}
+
+{#- "9:35 AM", "9:35 AM tomorrow", or "9:35 AM on Friday". -#}
+{%- macro vp_say(t) -%}
+  {%- set days = (t.date() - now().date()).days -%}
+  {{- t.strftime("%-I:%M %p") -}}
+  {{- "" if days == 0 else " tomorrow" if days == 1 else " on " ~ t.strftime("%A") -}}
+{%- endmacro -%}
+
+{#- Next occurrence of a repeating alarm.
+
+    `ts` is a scheduled ring time (unix timestamp). With `step`, move to the next
+    day first (after a ring); without, keep `ts` if its day already qualifies
+    (when an alarm is set). Then advance a day at a time until the weekday fits
+    `repeat`: once/daily (any day), weekdays (Mon-Fri), weekends (Sat-Sun).
+    Wall-clock time is kept across DST changes.
+
+    Returns JSON like vp_when: ts, local, say.
+-#}
+{%- macro vp_roll(ts, repeat="once", step=false) -%}
+  {%- set days = {"weekdays": [0, 1, 2, 3, 4], "weekends": [5, 6]}.get(repeat, [0, 1, 2, 3, 4, 5, 6]) -%}
+  {%- set ns = namespace(t=(ts | as_datetime | as_local) + timedelta(days=1 if step else 0)) -%}
+  {%- for _ in range(7) if ns.t.weekday() not in days -%}{%- set ns.t = ns.t + timedelta(days=1) -%}{%- endfor -%}
+  {{- {"ts": ns.t.timestamp(), "local": ns.t.strftime("%Y-%m-%d %H:%M:%S"), "say": vp_say(ns.t)} | to_json -}}
+{%- endmacro -%}
+
+{#- Parse a spoken clock time into the next matching moment.
+
+    `text` is the {time} wildcard as speech-to-text wrote it: "9:35 am", "935 AM",
+    "9.35", "7", "19:00", "one fifteen pm", "seven oh five". Whisper often drops
+    the colon, so 3-4 digit runs are split as H:MM / HH:MM; with no digits,
+    number words are read as hour then minutes. With no am/pm, 1-11 means whichever of morning or
+    evening comes next. `day` is "tomorrow" to skip today; "tomorrow" inside
+    `text` works too. `prefer` "morning" (alarm clocks) reads a bare 4-11 as AM.
+
+    Returns JSON (pipe through from_json):
+      ok     whether a time was found
+      ts     unix timestamp
+      local  "YYYY-MM-DD HH:MM:SS" in local time, for todo/input_datetime
+      say    "9:35 AM", plus " tomorrow" when it is not today
+-#}
+{%- macro vp_when(text, day="", prefer="") -%}
+  {%- set raw = (" " ~ text | lower | replace(".", "") | replace("-", " ") | replace(" a m", " am")
+      | replace(" p m", " pm") | replace("o'clock", "") | replace("oclock", "") ~ " ") -%}
+  {%- set tomorrow = day == "tomorrow" or "tomorrow" in raw -%}
+  {#- Part of day: "7 in the evening", "9 tonight", "7 tomorrow evening", "6 this morning". -#}
+  {%- set eve = raw is search(" ((in the|this|tomorrow) (afternoon|evening)|(at|tomorrow) night|tonight) ") -%}
+  {%- set morn = raw is search(" (in the|this|tomorrow) morning ") -%}
+  {#- Said as am/pm/noon/midnight, as opposed to implied by a part of day. -#}
+  {%- set pm_said = raw is search("(?<![a-z])pm(?![a-z])") or raw is search(" noon ") -%}
+  {%- set am_said = raw is search("(?<![a-z])am(?![a-z])") or raw is search(" midnight ") -%}
+  {%- set pm = pm_said or eve -%}
+  {%- set am = am_said or morn -%}
+  {%- set nums = {"oh": 0, "o": 0, "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+      "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+      "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+      "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+      "forty": 40, "fifty": 50} -%}
+  {#- Refuse rather than guess: any word that is not part of a time means the
+      wildcard took more than the time ("the station at 5 pm"), so report no
+      time and let the reply ask again. -#}
+  {#- Part-of-day words are allowed only when the pattern above read them. -#}
+  {%- set allowed = ["am", "pm", "noon", "midnight", "tomorrow", "today", "tonight", "this", "in", "the",
+      "at", "quarter", "half", "a", "past", "after", "to", "please"]
+      + (["morning", "afternoon", "evening", "night"] if eve or morn else []) -%}
+  {%- set leftover = raw | regex_findall("[a-z]+") | reject("in", allowed) | reject("in", nums) | list -%}
+  {%- set n = raw | regex_findall("[0-9]+") -%}
+  {%- set ns = namespace(h=-1, m=0, best=none, words=[]) -%}
+  {#- "quarter past six", "half past seven", "ten to nine", "twenty five past 4". -#}
+  {%- set rel = raw | regex_findall(" ((?:a )?quarter|half|[0-9]+|[a-z]+(?: [a-z]+)?) (past|after|to) ([0-9]+|[a-z]+) ") -%}
+  {%- if rel | length > 0 -%}
+    {%- set mins, how, hour = rel[0] -%}
+    {#- The two-word alternative can take in the word before: "at half", "at quarter". -#}
+    {%- if "quarter" in mins.split() -%}{%- set m = 15 -%}
+    {%- elif "half" in mins.split() -%}{%- set m = 30 -%}
+    {%- elif mins is search("^[0-9]+$") -%}{%- set m = mins | int -%}
+    {%- else -%}
+      {%- for w in mins.split() if w in nums -%}{%- set ns.words = ns.words + [nums[w]] -%}{%- endfor -%}
+      {%- set m = ns.words | sum if ns.words else -1 -%}
+    {%- endif -%}
+    {%- set h = hour | int if hour is search("^[0-9]+$") else nums.get(hour, -1) -%}
+    {%- if 1 <= m <= 59 and 1 <= h <= 12 -%}
+      {#- "ten to twelve pm" is 11:50 AM and "ten to twelve am" 11:50 PM: the hour
+          before twelve is on the other side of noon or midnight. -#}
+      {#- A part of day describes the time itself ("ten to twelve tonight" is 11:50 PM),
+          so only a spoken am/pm/noon/midnight flips. -#}
+      {%- if how == "to" and h == 12 and (am_said or pm_said) -%}{%- set am, pm = pm, am -%}{%- endif -%}
+      {%- set n = [(h if how != "to" else 12 if h == 1 else h - 1) | string, (m if how != "to" else 60 - m) | string] -%}
+    {%- else -%}
+      {%- set n = [] -%}{%- set leftover = leftover + [mins] -%}
+    {%- endif -%}
+  {%- elif raw is search(" half ([0-9]{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve) ") -%}
+    {#- "half six" (6:30, as said in Britain). -#}
+    {%- set hour = (raw | regex_findall(" half ([0-9]{1,2}|[a-z]+) "))[0] -%}
+    {%- set n = [(hour | int if hour is search("^[0-9]+$") else nums.get(hour, -1)) | string, "30"] -%}
+  {%- elif n | length == 0 -%}
+    {#- Number words: "one fifteen" -> [1, 15], "seven oh five" -> [7, 0, 5],
+        "twelve forty five" -> [12, 40, 5]. Hour is the first; minutes sum the rest. -#}
+    {%- set ns.words = [] -%}
+    {%- for w in raw | regex_findall("[a-z]+") if w in nums -%}{%- set ns.words = ns.words + [nums[w]] -%}{%- endfor -%}
+    {%- if ns.words | length > 0 and ns.words[0] > 0 -%}
+      {%- set n = [ns.words[0] | string, ns.words[1:] | sum | string] -%}
+    {%- elif raw is search("noon") -%}{%- set n = ["12", "0"] -%}{%- set pm = true -%}
+    {%- elif raw is search("midnight") -%}{%- set n = ["12", "0"] -%}{%- set am = true -%}
+    {%- endif -%}
+  {%- endif -%}
+  {%- if n | length >= 2 -%}{%- set ns.h = n[0] | int -%}{%- set ns.m = n[1] | int -%}
+  {%- elif n | length == 1 and n[0] | length <= 2 -%}{%- set ns.h = n[0] | int -%}
+  {%- elif n | length == 1 and n[0] | length == 3 -%}{%- set ns.h = n[0][0] | int -%}{%- set ns.m = n[0][1:] | int -%}
+  {%- elif n | length == 1 and n[0] | length == 4 -%}{%- set ns.h = n[0][:2] | int -%}{%- set ns.m = n[0][2:] | int -%}
+  {%- endif -%}
+  {%- set ok = leftover | length == 0 and 0 <= ns.h <= 23 and 0 <= ns.m <= 59 and not ((am or pm) and not 1 <= ns.h <= 12) -%}
+  {#- "12 tonight", "12 at night": midnight, not noon. -#}
+  {#- "12 tomorrow night" is the midnight that ends tomorrow, a day later again. -#}
+  {%- set late = false -%}
+  {%- if ok and ns.h == 12 and eve and not (pm_said or am_said) and raw is search(" (tonight|night) ") -%}
+    {%- set pm = false -%}{%- set am = true -%}{%- set late = tomorrow -%}
+  {%- endif -%}
+  {%- if ok -%}
+    {%- if pm and ns.h < 12 -%}{%- set ns.h = ns.h + 12 -%}{%- elif am and ns.h == 12 -%}{%- set ns.h = 0 -%}{%- endif -%}
+    {#- No am/pm on 1-12: take whichever of morning/evening comes next. -#}
+    {%- if not (am or pm) and prefer == "morning" and 4 <= ns.h <= 11 -%}
+      {%- set hours = [ns.h] -%}
+    {%- else -%}
+      {%- set hours = [ns.h % 12, ns.h % 12 + 12] if not (am or pm) and 1 <= ns.h <= 12 else [ns.h] -%}
+    {%- endif -%}
+    {%- for h in hours -%}
+      {%- set t = today_at("%02d:%02d" | format(h, ns.m)) -%}
+      {%- set t = t + timedelta(days=2 if late else 1) if tomorrow or t <= now() else t -%}
+      {%- if ns.best is none or t < ns.best -%}{%- set ns.best = t -%}{%- endif -%}
+    {%- endfor -%}
+  {%- endif -%}
+  {{- {"ok": ok,
+       "ts": ns.best.timestamp() if ok else 0,
+       "local": ns.best.strftime("%Y-%m-%d %H:%M:%S") if ok else "",
+       "say": (vp_say(ns.best)) if ok else ""} | to_json -}}
+{%- endmacro -%}
+
+{#- A clock-time reminder: vp_when on the {time} slot, after undoing one bad split.
+
+    In "remind me at ten to nine to call mom" the sentence matcher may cut at the
+    first "to": time "ten", task "nine to call mom". When the time is only a
+    minutes word and the task starts with an hour and "to", the hour belongs to
+    the time: "ten to nine", task "call mom".
+
+    Returns vp_when's JSON plus `task`.
+-#}
+{%- macro vp_reminder(time, task, day="") -%}
+  {%- set t = time | trim -%}
+  {%- set k = task | trim -%}
+  {#- The hour may carry what vp_when reads as said (am, pm, noon, midnight) or a part
+      of day: "nine pm to", "twelve noon to", "twelve tonight to". -#}
+  {%- set head = k | regex_findall("^((?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|[0-9]{1,2})(?: (?:am|pm|a\\.m\\.|p\\.m\\.|noon|midnight|tonight|at night|(?:in the|this|tomorrow) (?:morning|afternoon|evening)|tomorrow night))?) to (.+)$") -%}
+  {%- if head | length > 0 and t | lower is search("^(?:at )?(?:a quarter|quarter|half|five|ten|twenty|twenty[ -]five|5|10|15|20|25)$") -%}
+    {%- set t = t ~ " to " ~ head[0][0] -%}
+    {%- set k = head[0][1] -%}
+  {%- endif -%}
+  {#- "remind me to call mom tomorrow evening at 7": the day words end up at the end
+      of the task; they belong to the time. -#}
+  {%- set tail = k | regex_findall("^(.+?) (tomorrow(?: (?:morning|afternoon|evening|night))?|tonight|this (?:morning|afternoon|evening))$") -%}
+  {%- if tail | length > 0 -%}
+    {%- set t = t ~ " " ~ tail[0][1] -%}
+    {%- set k = tail[0][0] -%}
+  {%- endif -%}
+  {#- A part-of-day {day} ("tomorrow evening") is read with the time. -#}
+  {%- if day not in ("", "today", "tomorrow") -%}
+    {%- set t = t ~ " " ~ day -%}
+    {%- set day = "" -%}
+  {%- endif -%}
+  {%- set when = vp_when(t, day) | from_json -%}
+  {#- "remind me to move the car at the station at 5 pm": the matcher cuts at the
+      first "at", so the time is "the station at 5 pm". If only the part after the
+      last "at" is a time, the rest belongs to the task. -#}
+  {%- if not when.ok and " at " in t -%}
+    {%- set parts = t.rsplit(" at ", 1) -%}
+    {%- set retry = vp_when(parts[1], day) | from_json -%}
+    {%- if retry.ok -%}
+      {%- set when = retry -%}
+      {%- set k = k ~ " at " ~ parts[0] -%}
+    {%- endif -%}
+  {%- endif -%}
+  {{- {"ok": when.ok, "ts": when.ts, "local": when.local, "say": when.say, "task": k} | to_json -}}
+{%- endmacro -%}

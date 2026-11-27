@@ -1,0 +1,92 @@
+# Alarm clock; there is no built-in alarm intent (only timers). Handled by
+# packages/voice_alarm.yaml. Whisper often drops the colon ("935 AM"), so
+# {time} is a wildcard parsed by vp_when in custom_templates/voice_pack.jinja.
+#
+# "stop" on its own stays Home Assistant's media pause; stop a ringing alarm
+# with "stop the alarm", "dismiss", "I'm up", or snooze it.
+language: "en"
+intents:
+  SetAlarm:
+    data:
+      - sentences:
+          - "[(can|could|would) you] [please] set [an|a|the|my] alarm (for|at) {time} [{alarm_repeat}] [(with|using) [the] {alarm_sound} [sound]]"
+          - "[(can|could|would) you] [please] set [an|a] {time} [{alarm_sound}] alarm [{alarm_repeat}]"
+          - "[(can|could|would) you] [please] wake me [up] at {time} [{alarm_repeat}] [(with|using) [the] {alarm_sound} [sound]]"
+          - "[(can|could|would) you] [please] set [a|an] {alarm_repeat_adj:alarm_repeat} [{alarm_sound}] alarm (for|at) {time} [(with|using) [the] {alarm_sound} [sound]]"
+  CancelAlarm:
+    data:
+      - sentences:
+          - "[please] (cancel|delete|clear|turn off|remove) [the|my|that] alarm"
+  DismissAlarm:
+    data:
+      - sentences:
+          - "[please] (stop|dismiss|silence) [the|my|that] alarm"
+          - "dismiss"
+          - "I'm (up|awake)"
+          - "I am (up|awake)"
+  SnoozeAlarm:
+    data:
+      - sentences:
+          - "snooze [the|my] [alarm]"
+          - "snooze [the|my] [alarm] for {snooze_minutes} minute[s]"
+  SkipAlarm:
+    data:
+      - sentences:
+          - "skip [the|my] next alarm"
+          - "skip tomorrow's alarm"
+          - "skip [the|my] alarm [tomorrow]"
+          - "don't wake me [up] tomorrow"
+  AlarmStatus:
+    data:
+      - sentences:
+          - "(when|what time) is [the|my] [next] alarm [set] [for]"
+          - "is [there an|the|my] alarm set"
+  SetAlarmSound:
+    data:
+      - sentences:
+          - "(change|set|switch) [the|my] alarm [sound] to [the] {alarm_sound} [sound]"
+          - "use [the] {alarm_sound} [sound] for [the|my] alarm"
+  AlarmSoundStatus:
+    data:
+      - sentences:
+          - "(what's|what is) [the|my] alarm sound"
+          - "what alarm sounds (are there|do you have|can I (use|choose|pick))"
+          - "list [the] alarm sounds"
+  PreviewAlarmSound:
+    data:
+      - sentences:
+          - "(play|preview) [the] {alarm_sound} alarm [sound]"
+          - "what does [the] {alarm_sound} alarm sound like"
+lists:
+  time:
+    wildcard: true
+  alarm_sound:
+    values:
+      - "classic"
+      - in: "beep[s]"
+        out: "classic"
+      - "chimes"
+      - in: "chime"
+        out: "chimes"
+      - "pulse"
+      - "gentle"
+  alarm_repeat:
+    values:
+      - in: "(every day|daily)"
+        out: "daily"
+      - in: "(on weekdays|every weekday|weekdays)"
+        out: "weekdays"
+      - in: "(on weekends|every weekend|weekends)"
+        out: "weekends"
+  alarm_repeat_adj:
+    values:
+      - in: "daily"
+        out: "daily"
+      - in: "weekday"
+        out: "weekdays"
+      - in: "weekend"
+        out: "weekends"
+  snooze_minutes:
+    range:
+      from: 1
+      to: 60

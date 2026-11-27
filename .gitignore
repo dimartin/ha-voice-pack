@@ -1,0 +1,6 @@
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+# Per-home settings; the repo ships voice_pack_config.example.jinja.
+custom_templates/voice_pack_config.jinja

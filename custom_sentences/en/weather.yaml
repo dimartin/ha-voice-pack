@@ -1,0 +1,27 @@
+# Forecast questions the built-in weather intent does not answer (it only
+# reports current conditions). Handled by packages/voice_weather.yaml. "tonight" and
+# "this evening" both arrive as day=tonight and use the hourly forecast.
+language: "en"
+intents:
+  WeatherForecast:
+    data:
+      - sentences:
+          - "(what's|what is|how's|how is) the (weather|forecast) [going to be] [like] {day}"
+          - "(what's|what is) {day}'s (weather|forecast)"
+          - "(what's|what is) the (high|temperature) [going to be] {day}"
+          - "(what's|what is) the forecast"
+  RainCheck:
+    data:
+      - sentences:
+          - "(will|is) it [going to] rain [{day}]"
+          - "(is|will) there be rain [{day}]"
+          - "is rain (expected|in the forecast) [{day}]"
+          - "do I need an umbrella [{day}]"
+lists:
+  day:
+    values:
+      - "today"
+      - "tomorrow"
+      - "tonight"
+      - in: "this evening"
+        out: "tonight"

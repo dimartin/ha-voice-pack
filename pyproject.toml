@@ -1,0 +1,13 @@
+[project]
+name = "ha-voice-pack"
+version = "0.1.0"
+description = "Alarms, reminders and forecasts for Home Assistant Assist, without the LLM"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+
+[project.optional-dependencies]
+# hassil pinned to the version Home Assistant 2026.9 ships.
+dev = ["hassil==3.12.1", "jinja2", "pyyaml", "pytest"]
+
+[tool.setuptools]
+packages = []

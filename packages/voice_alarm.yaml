@@ -1,0 +1,421 @@
+# Alarm clock for custom_sentences/en/alarm.yaml, on vp_satellite().
+#
+# One alarm, once or repeating (daily, weekdays, weekends). When it fires it
+# plays the chosen tone, says the time, then repeats the tone until stopped,
+# snoozed or cancelled, for at most 5 minutes. If vp_media_player() names the
+# satellite's speaker, it rings at vp_alarm_volume() whatever the speaker was set
+# to, and the speaker's own volume is put back after. Tones are
+# /config/www/voice_pack/alarm_*.mp3 (sounds/ in the repo).
+#
+# State: wake_alarm_base is the scheduled ring (repeats roll it forward);
+# wake_alarm is the next ring, which snooze moves; wake_alarm_ringing is on
+# while it rings.
+
+input_datetime:
+  wake_alarm:
+    name: Wake Alarm
+    has_date: true
+    has_time: true
+    icon: mdi:alarm
+  wake_alarm_base:
+    name: Wake Alarm Scheduled
+    has_date: true
+    has_time: true
+    icon: mdi:alarm-note
+
+input_boolean:
+  wake_alarm_enabled:
+    name: Wake Alarm Enabled
+    icon: mdi:alarm-check
+  wake_alarm_ringing:
+    name: Wake Alarm Ringing
+    initial: false
+    icon: mdi:alarm-bell
+
+input_select:
+  wake_alarm_sound:
+    name: Wake Alarm Sound
+    options: [classic, chimes, pulse, gentle]
+    icon: mdi:music-note
+  wake_alarm_repeat:
+    name: Wake Alarm Repeat
+    options: [once, daily, weekdays, weekends]
+    icon: mdi:calendar-sync
+
+intent_script:
+  SetAlarm:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      - variables:
+          parsed: >-
+            {% from 'voice_pack.jinja' import vp_when %}{{ vp_when(time, prefer="morning") | from_json }}
+          repeat: "{{ alarm_repeat | default('once') }}"
+      - if: "{{ parsed.ok }}"
+        then:
+          - variables:
+              alarm: >-
+                {% from 'voice_pack.jinja' import vp_roll %}{{ vp_roll(parsed.ts, repeat) | from_json }}
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: [input_datetime.wake_alarm_base, input_datetime.wake_alarm]
+            data:
+              timestamp: "{{ alarm.ts }}"
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.wake_alarm_repeat
+            data:
+              option: "{{ repeat }}"
+          - if: "{{ alarm_sound is defined }}"
+            then:
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.wake_alarm_sound
+                data:
+                  option: "{{ alarm_sound }}"
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.wake_alarm_ringing
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.wake_alarm_enabled
+          - variables:
+              result:
+                ok: true
+                say: "{{ alarm.say }}"
+                repeat: "{{ repeat }}"
+          - stop: ""
+            response_variable: result
+        else:
+          - variables:
+              result:
+                ok: false
+          - stop: ""
+            response_variable: result
+    speech:
+      text: >-
+        {%- set r = action_response -%}
+        {%- set every = {"daily": ", repeating every day", "weekdays": ", repeating on weekdays", "weekends": ", repeating on weekends"} -%}
+        {%- if r.ok -%}
+        Alarm set for {{ r.say }}{{ every.get(r.repeat, "") }}{{ ", with the " ~ alarm_sound ~ " sound" if alarm_sound is defined }}.
+        {%- else -%}
+        Sorry, I didn't catch the time for the alarm.
+        {%- endif -%}
+
+  CancelAlarm:
+    action:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: [input_boolean.wake_alarm_enabled, input_boolean.wake_alarm_ringing]
+    speech:
+      text: "Alarm cancelled."
+
+  DismissAlarm:
+    action:
+      - variables:
+          was_ringing: "{{ is_state('input_boolean.wake_alarm_ringing', 'on') }}"
+      - if: "{{ was_ringing }}"
+        then:
+          - action: script.voice_pack_alarm_finish
+        else:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.wake_alarm_enabled
+      - variables:
+          result:
+            was_ringing: "{{ was_ringing }}"
+      - stop: ""
+        response_variable: result
+    speech:
+      text: >-
+        {%- from 'voice_pack.jinja' import vp_say -%}
+        {%- if action_response.was_ringing | default(false) and is_state("input_boolean.wake_alarm_enabled", "on") -%}
+        Alarm stopped. The next one is at {{ vp_say(state_attr("input_datetime.wake_alarm", "timestamp") | as_datetime | as_local) }}.
+        {%- elif action_response.was_ringing | default(false) -%}
+        Alarm stopped.
+        {%- else -%}
+        Alarm cancelled.
+        {%- endif -%}
+
+  SnoozeAlarm:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      - variables:
+          minutes: >-
+            {% from 'voice_pack_config.jinja' import vp_snooze_minutes %}{{ snooze_minutes | default(vp_snooze_minutes()) | int(9) }}
+          ok: "{{ is_state('input_boolean.wake_alarm_ringing', 'on') }}"
+      - if: "{{ ok }}"
+        then:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.wake_alarm_ringing
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.wake_alarm
+            data:
+              timestamp: "{{ (now() + timedelta(minutes=minutes)).replace(second=0).timestamp() }}"
+      - variables:
+          result:
+            ok: "{{ ok }}"
+            minutes: "{{ minutes }}"
+      - stop: ""
+        response_variable: result
+    speech:
+      text: >-
+        {%- if action_response.ok -%}
+        Snoozing for {{ action_response.minutes }} minutes.
+        {%- else -%}
+        No alarm is ringing.
+        {%- endif -%}
+
+  SkipAlarm:
+    action:
+      - variables:
+          repeat: "{{ states('input_select.wake_alarm_repeat') }}"
+          enabled: "{{ is_state('input_boolean.wake_alarm_enabled', 'on') }}"
+          skipped: >-
+            {% from 'voice_pack.jinja' import vp_say %}{{ vp_say(state_attr('input_datetime.wake_alarm_base', 'timestamp') | as_datetime | as_local) }}
+          next: >-
+            {% from 'voice_pack.jinja' import vp_roll %}{{ vp_roll(state_attr('input_datetime.wake_alarm_base', 'timestamp'), repeat, true) | from_json }}
+      - if: "{{ enabled and repeat != 'once' }}"
+        then:
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: [input_datetime.wake_alarm_base, input_datetime.wake_alarm]
+            data:
+              timestamp: "{{ next.ts }}"
+        else:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.wake_alarm_enabled
+      - variables:
+          result:
+            enabled: "{{ enabled }}"
+            repeating: "{{ repeat != 'once' }}"
+            skipped: "{{ skipped }}"
+            next: "{{ next.say }}"
+      - stop: ""
+        response_variable: result
+    speech:
+      text: >-
+        {%- set r = action_response -%}
+        {%- if not r.enabled -%}
+        No alarm is set.
+        {%- elif r.repeating -%}
+        OK, I'll skip the alarm at {{ r.skipped }}. The next one is at {{ r.next }}.
+        {%- else -%}
+        OK, I cancelled the alarm at {{ r.skipped }}.
+        {%- endif -%}
+
+  AlarmStatus:
+    speech:
+      text: >-
+        {%- from 'voice_pack.jinja' import vp_say -%}
+        {%- set every = {"daily": ", repeating every day", "weekdays": ", repeating on weekdays", "weekends": ", repeating on weekends"} -%}
+        {%- if is_state("input_boolean.wake_alarm_enabled", "on") -%}
+        Your alarm is set for {{ vp_say(state_attr("input_datetime.wake_alarm", "timestamp") | as_datetime | as_local) }}{{ every.get(states("input_select.wake_alarm_repeat"), "") }}, with the {{ states("input_select.wake_alarm_sound") }} sound.
+        {%- else -%}
+        No alarm is set.
+        {%- endif -%}
+
+  SetAlarmSound:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.wake_alarm_sound
+        data:
+          option: "{{ alarm_sound }}"
+    speech:
+      text: "Your alarm will use the {{ alarm_sound }} sound."
+
+  AlarmSoundStatus:
+    speech:
+      text: >-
+        {%- set opts = state_attr("input_select.wake_alarm_sound", "options") -%}
+        Your alarm sound is {{ states("input_select.wake_alarm_sound") }}. You can choose {{ opts[:-1] | join(", ") }}, or {{ opts[-1] }}.
+
+  PreviewAlarmSound:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      # Run detached so the tone plays after this reply, not over it.
+      - action: script.turn_on
+        target:
+          entity_id: script.voice_pack_preview_alarm_sound
+        data:
+          variables:
+            sound: "{{ alarm_sound }}"
+    speech:
+      text: "Here's the {{ alarm_sound }} alarm."
+
+script:
+  # Exposed to the LLM agent as a fallback for phrasings the sentences miss.
+  # Routes through the built-in agent so time parsing lives in one place.
+  set_alarm:
+    alias: Set alarm
+    description: Set the alarm clock. Pass the time as the user said it, e.g. "9:35 am" or "7", plus "every day", "on weekdays" or "on weekends" if they asked for a repeating alarm.
+    fields:
+      time:
+        description: Alarm time as spoken, e.g. "9:35 am", "935", "7 pm on weekdays"
+        required: true
+        selector:
+          text:
+    sequence:
+      - action: conversation.process
+        data:
+          agent_id: conversation.home_assistant
+          language: en
+          text: "set an alarm for {{ time }}"
+        response_variable: r
+      - variables:
+          result:
+            speech: "{{ r.response.speech.plain.speech }}"
+      - stop: ""
+        response_variable: result
+
+  # A ring is over (stopped, or rang out): one-shot alarms switch off,
+  # repeating ones move to their next day.
+  voice_pack_alarm_finish:
+    alias: Finish alarm ring
+    sequence:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.wake_alarm_ringing
+      - variables:
+          repeat: "{{ states('input_select.wake_alarm_repeat') }}"
+      - if: "{{ repeat == 'once' }}"
+        then:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.wake_alarm_enabled
+        else:
+          - variables:
+              next: >-
+                {% from 'voice_pack.jinja' import vp_roll %}{{ vp_roll(state_attr('input_datetime.wake_alarm_base', 'timestamp'), repeat, true) | from_json }}
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: [input_datetime.wake_alarm_base, input_datetime.wake_alarm]
+            data:
+              timestamp: "{{ next.ts }}"
+    mode: queued
+
+  # For a hardware button or dashboard: stop the alarm if it is ringing.
+  voice_pack_alarm_dismiss:
+    alias: Dismiss alarm
+    sequence:
+      - condition: state
+        entity_id: input_boolean.wake_alarm_ringing
+        state: "on"
+      - action: script.voice_pack_alarm_finish
+
+  voice_pack_preview_alarm_sound:
+    alias: Preview alarm sound
+    fields:
+      sound:
+        description: One of the wake_alarm_sound options
+    sequence:
+      - delay: 3
+      - action: assist_satellite.announce
+        target:
+          entity_id: >-
+            {% from 'voice_pack_config.jinja' import vp_satellite %}{{ vp_satellite() }}
+        data:
+          media_id: "/local/voice_pack/alarm_{{ sound }}.mp3"
+          preannounce: false
+    mode: restart
+
+automation:
+  - id: wake_alarm_ring
+    alias: Wake alarm
+    description: Ring the alarm clock until stopped, snoozed or cancelled, at most 5 minutes.
+    triggers:
+      - trigger: time
+        at: input_datetime.wake_alarm
+        id: due
+      # Home Assistant was down at alarm time: ring if it was in the last 15 minutes.
+      - trigger: homeassistant
+        event: start
+        id: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.wake_alarm_enabled
+        state: "on"
+      - condition: template
+        value_template: >-
+          {{ trigger.id == 'due' or 0 <= now().timestamp() - state_attr('input_datetime.wake_alarm', 'timestamp') | float(0) <= 900 }}
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.wake_alarm_ringing
+      - variables:
+          satellite: >-
+            {% from 'voice_pack_config.jinja' import vp_satellite %}{{ vp_satellite() }}
+          player: >-
+            {% from 'voice_pack_config.jinja' import vp_media_player %}{{ vp_media_player() }}
+          tone: "/local/voice_pack/alarm_{{ states('input_select.wake_alarm_sound') }}.mp3"
+          stop_at: "{{ (now() + timedelta(minutes=5)).timestamp() }}"
+          volume: "{{ state_attr(player, 'volume_level') if player else none }}"
+          # A speaker left at 1% would ring silently, so the alarm sets its own level.
+          # Clamped to 0-1: volume_set rejects 50 (a percentage), which would stop the alarm.
+          alarm_volume: >-
+            {% import 'voice_pack_config.jinja' as c %}{% set v = c.vp_alarm_volume() | float(0.5) if c.vp_alarm_volume is defined else 0.5 %}{{ [[v, 0] | max, 1] | min }}
+          set_volume: "{{ volume is number }}"
+      - if: "{{ set_volume }}"
+        then:
+          - action: media_player.volume_set
+            target:
+              entity_id: "{{ player }}"
+            data:
+              volume_level: "{{ alarm_volume }}"
+      - action: assist_satellite.announce
+        target:
+          entity_id: "{{ satellite }}"
+        data:
+          media_id: "{{ tone }}"
+          preannounce: false
+      - action: assist_satellite.announce
+        target:
+          entity_id: "{{ satellite }}"
+        data:
+          message: "It's {{ now().strftime('%-I:%M') }}. This is your alarm."
+          preannounce: false
+      # The gap between tones leaves room for the wake word and "stop the alarm".
+      - repeat:
+          while:
+            - condition: state
+              entity_id: input_boolean.wake_alarm_ringing
+              state: "on"
+            - condition: template
+              value_template: "{{ now().timestamp() < stop_at | float }}"
+          sequence:
+            - delay: 2
+            # Don't talk over someone saying "stop the alarm".
+            - wait_template: "{{ is_state(satellite, 'idle') }}"
+              timeout: 20
+            - condition: state
+              entity_id: input_boolean.wake_alarm_ringing
+              state: "on"
+            - action: assist_satellite.announce
+              target:
+                entity_id: "{{ satellite }}"
+              data:
+                media_id: "{{ tone }}"
+                preannounce: false
+      - if: "{{ set_volume }}"
+        then:
+          - action: media_player.volume_set
+            target:
+              entity_id: "{{ player }}"
+            data:
+              volume_level: "{{ volume }}"
+      # Rang out without being stopped or snoozed.
+      - if:
+          - condition: state
+            entity_id: input_boolean.wake_alarm_ringing
+            state: "on"
+        then:
+          - action: script.voice_pack_alarm_finish
+    mode: single

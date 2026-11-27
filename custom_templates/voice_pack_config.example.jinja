@@ -1,0 +1,19 @@
+{#- Per-home settings for the voice pack. Copy to voice_pack_config.jinja in
+    /config/custom_templates and set your own entity ids. -#}
+
+{#- Satellite that speaks alarms and reminders. -#}
+{%- macro vp_satellite() -%}assist_satellite.kitchen_assist_satellite{%- endmacro -%}
+
+{#- Weather entity with daily and hourly forecasts (Met.no has both). -#}
+{%- macro vp_weather() -%}weather.forecast_home{%- endmacro -%}
+
+{#- The satellite's own speaker, so the alarm can set its volume. Leave empty to
+    ring at whatever volume the speaker has. -#}
+{%- macro vp_media_player() -%}media_player.kitchen_speaker{%- endmacro -%}
+
+{#- Default snooze length in minutes ("snooze for 5 minutes" overrides it). -#}
+{%- macro vp_snooze_minutes() -%}9{%- endmacro -%}
+
+{#- Volume the alarm rings at (0 to 1), whatever the speaker was set to. The
+    speaker's own volume is put back when the alarm ends. -#}
+{%- macro vp_alarm_volume() -%}0.5{%- endmacro -%}

@@ -1,0 +1,18 @@
+# Optional: stop a ringing alarm with the satellite's hardware button.
+# Copy to /config/packages/voice_pack_local.yaml and set the button entity
+# (an ESPHome satellite's action button is usually an event.* entity).
+automation:
+  - id: voice_pack_button_dismiss
+    alias: Alarm button dismiss
+    description: Pressing the satellite button stops a ringing alarm.
+    triggers:
+      - trigger: state
+        entity_id: event.kitchen_satellite_action_button
+        not_from: unavailable
+    conditions:
+      - condition: state
+        entity_id: input_boolean.wake_alarm_ringing
+        state: "on"
+    actions:
+      - action: script.voice_pack_alarm_dismiss
+    mode: single

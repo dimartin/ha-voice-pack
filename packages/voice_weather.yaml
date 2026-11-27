@@ -1,0 +1,143 @@
+# Spoken forecasts for custom_sentences/en/weather.yaml from vp_weather().
+# today/tomorrow use the daily forecast (condition, high, low, precipitation);
+# tonight uses the hourly rows from 17:00 (or now, if later) to midnight.
+
+intent_script:
+  WeatherForecast:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      - action: weather.get_forecasts
+        target:
+          entity_id: >-
+            {% from 'voice_pack_config.jinja' import vp_weather %}{{ vp_weather() }}
+        data:
+          type: '{{ "hourly" if day | default("today") == "tonight" else "daily" }}'
+        response_variable: wx
+      - stop: ""
+        response_variable: wx
+    speech:
+      text: >-
+        {%- from 'voice_pack_config.jinja' import vp_weather -%}
+        {%- set d = day | default("today") -%}
+        {%- set fc = action_response[vp_weather()].forecast -%}
+        {%- set names = {"partlycloudy": "partly cloudy", "clear-night": "clear", "lightning": "stormy", "lightning-rainy": "thunderstorms", "snowy-rainy": "sleet", "pouring": "heavy rain", "rainy": "rain", "windy-variant": "windy", "exceptional": "unusual weather"} -%}
+        {%- if d == "tonight" -%}
+          {%- set start = [now(), today_at("17:00")] | max - timedelta(hours=1) -%}
+          {%- set end = today_at("00:00") + timedelta(days=1) -%}
+          {%- set ns = namespace(rows=[], c=none, n=0) -%}
+          {%- for x in fc -%}
+            {%- set t = x.datetime | as_datetime | as_local -%}
+            {%- if start < t < end -%}{%- set ns.rows = ns.rows + [x] -%}{%- endif -%}
+          {%- endfor -%}
+          {%- if ns.rows | length == 0 -%}
+        I don't have a forecast for tonight.
+          {%- else -%}
+            {%- set conds = ns.rows | map(attribute="condition") | list -%}
+            {%- for c in conds | unique -%}
+              {%- set k = conds | select("eq", c) | list | length -%}
+              {%- if k > ns.n -%}{%- set ns.c = c -%}{%- set ns.n = k -%}{%- endif -%}
+            {%- endfor -%}
+            {%- set first = ns.rows[0].temperature | round | int -%}
+            {%- set last = ns.rows[-1].temperature | round | int -%}
+        Tonight: {{ names.get(ns.c, ns.c) }}, {% if first == last %}around {{ first }} degrees{% else %}{{ first }} degrees, {{ "dropping" if last < first else "rising" }} to {{ last }} by midnight{% endif %}.
+          {%- endif -%}
+        {%- else -%}
+          {%- set target = (now() + timedelta(days=1 if d == "tomorrow" else 0)).date() -%}
+          {%- set ns = namespace(f=none) -%}
+          {%- for x in fc -%}
+            {%- if ns.f is none and (x.datetime | as_datetime | as_local).date() == target -%}{%- set ns.f = x -%}{%- endif -%}
+          {%- endfor -%}
+          {%- if ns.f is none -%}
+        I don't have a forecast for {{ d }}.
+          {%- else -%}
+        {{ d | capitalize }}: {{ names.get(ns.f.condition, ns.f.condition) }}, with a high of {{ ns.f.temperature | round }} and a low of {{ ns.f.templow | round }} degrees.
+          {%- endif -%}
+        {%- endif -%}
+
+  RainCheck:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      - action: weather.get_forecasts
+        target:
+          entity_id: >-
+            {% from 'voice_pack_config.jinja' import vp_weather %}{{ vp_weather() }}
+        data:
+          type: '{{ "hourly" if day | default("today") == "tonight" else "daily" }}'
+        response_variable: wx
+      - stop: ""
+        response_variable: wx
+    speech:
+      text: >-
+        {%- from 'voice_pack_config.jinja' import vp_weather -%}
+        {%- set d = day | default("today") -%}
+        {%- set fc = action_response[vp_weather()].forecast -%}
+        {%- set wet = ["rainy", "pouring", "lightning-rainy", "snowy-rainy"] -%}
+        {%- if d == "tonight" -%}
+          {%- set start = [now(), today_at("17:00")] | max - timedelta(hours=1) -%}
+          {%- set end = today_at("00:00") + timedelta(days=1) -%}
+          {%- set ns = namespace(rows=[]) -%}
+          {%- for x in fc -%}
+            {%- set t = x.datetime | as_datetime | as_local -%}
+            {%- if start < t < end -%}{%- set ns.rows = ns.rows + [x] -%}{%- endif -%}
+          {%- endfor -%}
+          {%- set p = ns.rows | map(attribute="precipitation") | map("float", 0) | sum -%}
+          {%- if ns.rows | length == 0 -%}
+        I don't have a forecast for tonight.
+          {%- elif p > 0 or ns.rows | selectattr("condition", "in", wet) | list | length > 0 -%}
+        Yes, rain is expected tonight{% if p > 0 %}, about {{ p | round(2) }} inches{% endif %}.
+          {%- else -%}
+        No rain expected tonight.
+          {%- endif -%}
+        {%- else -%}
+          {%- set target = (now() + timedelta(days=1 if d == "tomorrow" else 0)).date() -%}
+          {%- set ns = namespace(f=none) -%}
+          {%- for x in fc -%}
+            {%- if ns.f is none and (x.datetime | as_datetime | as_local).date() == target -%}{%- set ns.f = x -%}{%- endif -%}
+          {%- endfor -%}
+          {%- if ns.f is none -%}
+        I don't have a forecast for {{ d }}.
+          {%- elif ns.f.condition in wet or (ns.f.precipitation | float(0)) > 0 -%}
+        Yes, rain is expected {{ d }}{% if (ns.f.precipitation | float(0)) > 0 %}, about {{ ns.f.precipitation }} inches{% endif %}.
+          {%- else -%}
+        No rain expected {{ d }}.
+          {%- endif -%}
+        {%- endif -%}
+
+script:
+  # Exposed to the LLM agent for forecast questions the sentences miss. The intent
+  # scripts above are voice only, because Home Assistant's generic tool parameters
+  # can't carry a day. Routes through the built-in agent, so the spoken answer is
+  # exactly what the sentences give and the model never words it itself.
+  weather_forecast:
+    alias: Weather forecast
+    description: >-
+      Get the weather forecast for today, tomorrow or tonight, as a sentence to say to the
+      user word for word. Set rain to true for questions about rain or umbrellas.
+    fields:
+      day:
+        description: today, tomorrow or tonight
+        required: true
+        default: today
+        selector:
+          select:
+            options: [today, tomorrow, tonight]
+      rain:
+        description: true when the user only asked whether it will rain
+        selector:
+          boolean:
+    sequence:
+      - variables:
+          d: "{{ day if day in ['today', 'tomorrow', 'tonight'] else 'today' }}"
+      - action: conversation.process
+        data:
+          agent_id: conversation.home_assistant
+          language: en
+          text: "{{ ('will it rain ' if rain | default(false) else 'what is the weather ') ~ d }}"
+        response_variable: r
+      - variables:
+          result:
+            speech: "{{ r.response.speech.plain.speech }}"
+      - stop: ""
+        response_variable: result

@@ -1,0 +1,154 @@
+# "Play rock" plays Music Assistant's Rock genre instead of searching for a
+# track named "rock". Sentences and the genre list come from
+# tools/ma_genre_sentences.py (custom_sentences/en/music_genres.yaml). Music plays
+# on the Music Assistant player in the satellite's area.
+
+intent_script:
+  PlayMedia:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      - action: script.voice_pack_play_search
+        data:
+          query: "{{ search_query }}"
+          area: "{{ area | default('') }}"
+        response_variable: r
+      - stop: ""
+        response_variable: r
+    speech:
+      text: "{{ action_response.speech }}"
+
+  PlayGenre:
+    # Voice only: as an LLM tool its slots can't be expressed (see README).
+    platforms: [conversation]
+    action:
+      - action: script.play_music_genre
+        data:
+          genre: "{{ genre }}"
+          area: "{{ area | default('') }}"
+        response_variable: r
+      - stop: ""
+        response_variable: r
+    speech:
+      text: "{{ action_response.speech }}"
+
+script:
+  # Also exposed to the LLM agent for phrasings the sentences miss. Without an
+  # area it uses the area of vp_satellite().
+  play_music_genre:
+    alias: Play music genre
+    description: Play a music genre (for example rock, jazz or dance) from the music library. Pass the area only if the user named a room.
+    fields:
+      genre:
+        description: Genre name, e.g. "Rock", "Jazz", "Dance"
+        required: true
+        selector:
+          text:
+      area:
+        description: Room to play in, only if the user named one
+        selector:
+          text:
+    sequence:
+      - variables:
+          gid: >-
+            {%- from 'voice_pack_genres.jinja' import vp_genre_id -%}{{ vp_genre_id(genre) }}
+          where: >-
+            {%- from 'voice_pack_config.jinja' import vp_satellite -%}
+            {{ area if area | default('') else area_name(vp_satellite()) }}
+          player: >-
+            {{ integration_entities('music_assistant') | select('in', area_entities(where) if where else [])
+               | select('match', 'media_player\.') | first | default('') }}
+      - if: "{{ not gid }}"
+        then:
+          - variables:
+              result:
+                speech: "I don't have any {{ genre }} music."
+          - stop: ""
+            response_variable: result
+      - if: "{{ not player }}"
+        then:
+          - variables:
+              result:
+                speech: "There's no music player in the {{ where or 'room' }}."
+          - stop: ""
+            response_variable: result
+      - action: music_assistant.play_media
+        target:
+          entity_id: "{{ player }}"
+        data:
+          media_id: "library://genre/{{ gid }}"
+          enqueue: replace
+      - variables:
+          result:
+            speech: "Playing {{ genre | lower }}."
+      - stop: ""
+        response_variable: result
+
+  # PlayMedia: search Music Assistant for free text and play the best match on the
+  # player in the named area, or the satellite's. An exact name match wins, against
+  # the query as said or without a leading some/the/a/an/me/us ("the Beatles" and
+  # "me the Beatles" find The Beatles; "Beatles" alone does not), in the order
+  # artist, album, playlist, track; otherwise the first result, tracks first.
+  voice_pack_play_search:
+    alias: Play music search
+    fields:
+      query:
+        required: true
+        selector:
+          text:
+      area:
+        selector:
+          text:
+    sequence:
+      - variables:
+          q: >-
+            {{ query | trim | regex_replace('^(some|the|a|an|me|us) ', '', ignorecase=True) | trim }}
+          where: >-
+            {%- from 'voice_pack_config.jinja' import vp_satellite -%}
+            {{ area if area | default('') else area_name(vp_satellite()) }}
+          player: >-
+            {{ integration_entities('music_assistant') | select('in', area_entities(where) if where else [])
+               | select('match', 'media_player\.') | first | default('') }}
+      - if: "{{ not player }}"
+        then:
+          - variables:
+              result:
+                speech: "There's no music player in the {{ where or 'room' }}."
+          - stop: ""
+            response_variable: result
+      - action: music_assistant.search
+        data:
+          config_entry_id: "{{ config_entry_id(player) }}"
+          name: "{{ q }}"
+          limit: 5
+        response_variable: found
+      - variables:
+          pick: >-
+            {%- set ns = namespace(item=none) -%}
+            {%- for kind in ["artists", "albums", "playlists", "tracks"] -%}
+              {%- for x in found.get(kind, []) if ns.item is none and (x.name | lower) in [q | lower, query | trim | lower] -%}
+                {%- set ns.item = x -%}
+              {%- endfor -%}
+            {%- endfor -%}
+            {%- if ns.item is none -%}
+              {%- set ns.item = (found.get("tracks", []) + found.get("albums", []) + found.get("artists", []) + found.get("playlists", [])) | first | default(none) -%}
+            {%- endif -%}
+            {{ {"uri": ns.item.uri, "name": ns.item.name, "type": ns.item.media_type} if ns.item else {} }}
+      - if: "{{ not pick }}"
+        then:
+          - variables:
+              result:
+                speech: "I couldn't find {{ q }}."
+          - stop: ""
+            response_variable: result
+      - action: music_assistant.play_media
+        target:
+          entity_id: "{{ player }}"
+        data:
+          media_id: "{{ pick.uri }}"
+          enqueue: replace
+      - variables:
+          result:
+            speech: "Playing {{ pick.name }}."
+      - stop: ""
+        response_variable: result

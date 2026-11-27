@@ -1,0 +1,35 @@
+# "Play" phrasings for free-text music requests, handled by PlayMedia in
+# packages/voice_music.yaml on the Music Assistant player in the satellite's area.
+# Not Home Assistant's built-in HassMediaSearchAndPlay: on a pipeline whose agent is
+# an LLM, Home Assistant drops a local match of that intent and hands the request to
+# the LLM (assist_pipeline _async_local_fallback_intent_filter). A custom intent
+# name stays local on every pipeline.
+language: en
+intents:
+  PlayMedia:
+    data:
+      - sentences:
+          - "play {search_query}"
+          - "(could|can|would|will) you [please] play {search_query}"
+          - "please play {search_query}"
+          - "play {search_query} please"
+          - "(put on|throw on) {search_query}"
+          - "(I want|I would like|I'd like) to (hear|listen to) {search_query}"
+          - "let's (hear|listen to) {search_query}"
+          # "play music by the band Tool" would search Music Assistant for the
+          # whole phrase and find nothing. With "music by the band" as literal
+          # text the search is just "Tool", and hassil prefers this longer literal
+          # match over "play {search_query}" above.
+          - "[(could|can|would|will) you] [please] play [some] (music|songs|something|anything) by [the] [(band|artist|group|singer)] {search_query} [please]"
+        requires_context:
+          area:
+            slot: true
+      # A named room: "play jazz in the kitchen", "play Nina Simone on the kitchen
+      # speaker". Without these, the sentences above took the room into the search
+      # and played in the satellite's area.
+      - sentences:
+          - "[(could|can|would|will) you] [please] play {search_query} (in|on) [the] {area} [(speaker|speakers)] [please]"
+          - "(put on|throw on) {search_query} (in|on) [the] {area} [(speaker|speakers)]"
+          - "(I want|I would like|I'd like) to (hear|listen to) {search_query} (in|on) [the] {area} [(speaker|speakers)]"
+          - "let's (hear|listen to) {search_query} (in|on) [the] {area} [(speaker|speakers)]"
+          - "[(could|can|would|will) you] [please] play [some] (music|songs|something|anything) by [the] [(band|artist|group|singer)] {search_query} (in|on) [the] {area} [(speaker|speakers)] [please]"
